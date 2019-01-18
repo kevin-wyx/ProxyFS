@@ -128,9 +128,7 @@ func (cs *EtcdConn) vgStateChgEvent(revNum RevisionNumber, vgName string,
 		}
 
 		// This node is probably not in the map, so add it
-		cs.Lock()
 		cs.vgMap[vgName] = newVgInfo
-		cs.Unlock()
 
 		// A new VG was created.  If this node is a server then set the
 		// VG to onlining on this node (if multiple nodes are up this is

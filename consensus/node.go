@@ -198,6 +198,7 @@ func (cs *EtcdConn) updateNodeState(nodeName string, revNum RevisionNumber,
 	newState NodeState, conditionals []clientv3.Cmp) (err error) {
 
 	nodeInfo, nodeInfoCmp, err := cs.getNodeInfo(nodeName, revNum)
+	fmt.Printf("updateNodeState() nodeInfo is: %+v\n", nodeInfo)
 	if err != nil {
 		err = fmt.Errorf("updateNodeState(node %s, newState %s): getNodeInfo() failed: %s",
 			nodeName, newState, err)
@@ -208,7 +209,14 @@ func (cs *EtcdConn) updateNodeState(nodeName string, revNum RevisionNumber,
 		err = fmt.Errorf("updateNodeState(node %s, newState %s): node '%s' not in etcd",
 			nodeName, newState, nodeName)
 		fmt.Printf("%s\n", err)
-		return
+
+		// Create the node
+		err = cs.createNode(nodeName)
+		if err != nil {
+			return err
+		}
+
+		nodeInfo, nodeInfoCmp, err = cs.getNodeInfo(nodeName, revNum)
 	}
 
 	if conditionals == nil {
@@ -304,20 +312,26 @@ func (cs *EtcdConn) startHbAndMonitor() {
 		return
 	}
 
+	fmt.Printf("START HB CALLED\n")
+
 	// the heartbeat is about to start ...
 	cs.stopHBWG.Add(1)
 
 	// TODO - interval should be tunable
 	cs.HBTicker = time.NewTicker(1 * time.Second)
 	go func() {
+		fmt.Printf("GOROUTINE - IN LOOP\n")
 		for range cs.HBTicker.C {
+			fmt.Printf("TICK OF HEARTBEAT!!!!\n")
 
 			var stopHB bool
 			cs.Lock()
 			stopHB = cs.stopHB
 			cs.Unlock()
+			fmt.Printf("TICK OF HEARTBEAT!!!! stopHB: %v\n", stopHB)
 
 			if stopHB {
+				fmt.Printf("STOP ----- HB CALLED\n")
 				// Shutting down - stop heartbeating
 				cs.stopHBWG.Done()
 				return
@@ -326,6 +340,7 @@ func (cs *EtcdConn) startHbAndMonitor() {
 			cs.updateNodeHeartbeat(RevisionNumber(0))
 			cs.checkForDeadNodes()
 		}
+		fmt.Printf("GOROUTINE - AFTER FOR LOOP\n")
 	}()
 }
 
@@ -383,9 +398,17 @@ func (cs *EtcdConn) otherNodeStateEvent(revNum RevisionNumber, nodeName string,
 func (cs *EtcdConn) myNodeStateEvent(revNum RevisionNumber, nodeName string,
 	newNodeInfo *NodeInfo, nodeInfoCmp []clientv3.Cmp) {
 
+	fmt.Printf("node: %v changed to: %v\n", cs.hostName, newNodeInfo.NodeState)
+
 	switch newNodeInfo.NodeState {
 
+	case INITIAL:
+		fmt.Printf("SAW OWN INITIAL\n")
+		// This node is probably not in the map, so add it
+		cs.nodeMap[nodeName] = newNodeInfo
+
 	case STARTING:
+		fmt.Printf("SAW OWN STARTING server: %v\n", cs.server)
 		// This node is probably not in the map, so add it
 		cs.nodeMap[nodeName] = newNodeInfo
 

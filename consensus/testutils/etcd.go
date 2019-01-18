@@ -12,18 +12,6 @@ import (
 	"time"
 )
 
-// TODO - don't start clients since want Register() to create it....
-// how create with http interface, etc?
-//
-// Add example of how to use the test infrastructure...
-//
-// test:
-// 1. start 3 node cluster
-// 2. Register() with endpoints
-// 3. Do some tests with API
-// 4. Shutdown more than half of cluster
-// 6. attempt transaction and get back no leader error....
-
 // TestCluster wraps etcd's notation of a cluster being tested.
 type TestCluster struct {
 	Clus *ei.ClusterV3

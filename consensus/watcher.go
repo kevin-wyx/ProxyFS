@@ -26,6 +26,7 @@ func (cs *EtcdConn) stopWatchers() {
 	cs.stopWatcherChan <- struct{}{}
 }
 
+// TODO - dead code?
 // WaitWatchers waits for all watchers to return
 func (cs *EtcdConn) waitWatchers() {
 
