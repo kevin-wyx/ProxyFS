@@ -55,6 +55,8 @@ func (cs *EtcdConn) allVgsDown(revNum RevisionNumber) (allDown bool, compares []
 //
 func vgWatchResponse(cs *EtcdConn, response *clientv3.WatchResponse) (err error) {
 
+	fmt.Printf("\nvgWatchResponse() BEGIN - cs.vgMap: %+v\n\n", cs.vgMap["myTestVg"])
+
 	revNum := RevisionNumber(response.Header.Revision)
 	for _, ev := range response.Events {
 
@@ -71,23 +73,32 @@ func vgWatchResponse(cs *EtcdConn, response *clientv3.WatchResponse) (err error)
 		}
 
 		for vgName, newVgInfo := range vgInfos {
+			fmt.Printf("vgWatchResponse() vgName: %v state: %v vgMap[vgName]: %+v\n", vgName, newVgInfo.VgState, cs.vgMap[vgName])
 
 			cs.Lock()
 			vgInfo, ok := cs.vgMap[vgName]
+			if (newVgInfo != nil) && (vgInfo != nil) {
+				fmt.Printf("vgWatchResponse() BEFORE CHECK ok: %v newVgInfo.VgState: %v vgInfo.VgState: %v\n", ok,
+					newVgInfo.VgState, vgInfo.VgState)
+			}
 			if !ok || newVgInfo.VgState != vgInfo.VgState {
 
 				// a vg changed state
 				cs.vgStateChgEvent(revNum, vgName, newVgInfo, vgInfoCmps[vgName])
+			} else {
+				fmt.Printf("vgWatchResponse() ELSE CASE - vgName: %v state: %v\n", vgName, newVgInfo.VgState)
 			}
 
 			// if the vg still exists update the info and revision
 			// numbers (whether they changed or not)
+			fmt.Printf("vgWatchResponse() BEFORE STILL EXISTS - - vgName: %v state: %v\n", vgName, cs.vgMap]vgName])
 			vgInfo, ok = cs.vgMap[vgName]
 			if ok {
 				vgInfo.VgInfoValue = newVgInfo.VgInfoValue
 				vgInfo.EtcdKeyHeader = newVgInfo.EtcdKeyHeader
 			}
 			cs.Unlock()
+			fmt.Printf("vgWatchResponse() AFTER STILL EXISTS - - vgName: %v state: %v\n", vgName, cs.vgMap[vgName])
 		}
 	}
 	return
@@ -101,6 +112,8 @@ func vgWatchResponse(cs *EtcdConn, response *clientv3.WatchResponse) (err error)
 func (cs *EtcdConn) vgStateChgEvent(revNum RevisionNumber, vgName string,
 	newVgInfo *VgInfo, vgInfoCmp []clientv3.Cmp) {
 
+	fmt.Printf("vgStateChgEvent======\n")
+
 	// Something about a VG has changed ... try to figure out what it was
 	// and how to react
 
@@ -110,9 +123,6 @@ func (cs *EtcdConn) vgStateChgEvent(revNum RevisionNumber, vgName string,
 		delete(cs.vgMap, vgName)
 		return
 	}
-
-	fmt.Printf("vgChgEvent(): vg '%s' newVgInfo %v  node '%s' state '%v'\n",
-		vgName, newVgInfo, newVgInfo.VgNode, newVgInfo.VgState)
 
 	var (
 		conditionals = make([]clientv3.Cmp, 0, 1)
@@ -128,7 +138,12 @@ func (cs *EtcdConn) vgStateChgEvent(revNum RevisionNumber, vgName string,
 		}
 
 		// This node is probably not in the map, so add it
-		cs.vgMap[vgName] = newVgInfo
+		var copyVgInfo VgInfo
+		deepCopyVgInfo(*newVgInfo, &copyVgInfo)
+		fmt.Printf("AFTER DEEP COPY newVgInfo: %+v copyVgInfo: %v\n", *newVgInfo, copyVgInfo)
+
+		cs.vgMap[vgName] = &copyVgInfo
+		fmt.Printf("AFTER INSERT vgMap[vgName]: %+v <<<<======\n\n", cs.vgMap[vgName])
 
 		// A new VG was created.  If this node is a server then set the
 		// VG to onlining on this node (if multiple nodes are up this is
@@ -143,10 +158,11 @@ func (cs *EtcdConn) vgStateChgEvent(revNum RevisionNumber, vgName string,
 				vgName, newVgInfo, err)
 			return
 		}
-
 		operations = append(operations, putOps...)
 
 	case ONLININGVS:
+		fmt.Printf("====vgStateChgEvent() - STATE: %v node: %v mynode: %v\n", newVgInfo.VgState,
+			newVgInfo.VgNode, cs.hostName)
 		// If VG onlining on local host then start the online
 		if newVgInfo.VgNode != cs.hostName {
 			return
@@ -186,6 +202,7 @@ func (cs *EtcdConn) vgStateChgEvent(revNum RevisionNumber, vgName string,
 		operations = append(operations, putOps...)
 
 	case ONLINEVS:
+		fmt.Printf("-------vgStateChgEvent()----------\n")
 		// the VG is now online, so there's no work to do ...
 		return
 
@@ -281,8 +298,11 @@ func (cs *EtcdConn) vgStateChgEvent(revNum RevisionNumber, vgName string,
 	// update the shared state (or fail)
 	txnResp, err := cs.updateEtcd(conditionals, operations)
 
+	fmt.Printf("\n===vgChgEvent() END - cs.vgMap: %+v\n\n", cs.vgMap["myTestVg"])
+
 	// TODO: should we retry on failure?
 	fmt.Printf("vgChgEvent(): txnResp: %v err %v\n", txnResp, err)
+	fmt.Printf("\n===vgChgEvent() END2 - cs.vgMap: %+v\n\n", cs.vgMap["myTestVg"])
 }
 
 // Start the goroutine(s) that watch for, and react to, node events
@@ -386,6 +406,8 @@ func (cs *EtcdConn) setVgOfflining(vgName string) (err error) {
 
 	// TODO: ONLININGVS --> OFFLINING is not a valid transation;
 	// need to wait for onlining to finish before forcing this.
+	// TODO - actually, a VG could be stuck in ONLINING state and
+	// the only way to make progress is to transition to OFFLINING
 	if vgInfo.VgState == ONLININGVS {
 		fmt.Printf("setVgOfflining(): VG %s state is %s; offlining anyway (bug)\n", vgName, ONLININGVS)
 	}
@@ -445,7 +467,7 @@ func (cs *EtcdConn) setVgOnlining(vgName string, node string) (err error) {
 	txnResp, err := cs.updateEtcd(vgInfoCmp, putOperations)
 
 	// TODO: should we retry on failure?
-	fmt.Printf("setVgOnlining(): txnResp: %s err %s\n", cs.formatTxnResp(txnResp), err)
+	fmt.Printf("setVgOnlining(): txnResp: %v err %v\n", cs.formatTxnResp(txnResp), err)
 
 	return
 }

@@ -63,6 +63,8 @@ const (
 // VgInfoValue is the information associated with a volume group key in the etcd
 // database (except its JSON encoded in the database)
 //
+// NOTE: This struct is deep copied in deepCopyVgInfo().  If you add a field
+// here then be sure to change this function.
 type VgInfoValue struct {
 	VgState      VgState
 	VgNode       string
@@ -77,9 +79,33 @@ type VgInfoValue struct {
 // VgInfo is information associated with a volume group as well as the revision
 // number when the info was fetched and the last time the value was modified.
 //
+// NOTE: This struct is deep copied in deepCopyVgInfo().  If you add a field
+// here then be sure to change this function.
+//
+// NOTE: This struct is deep copied in deepCopyVgInfo().  If you add a field
+// here then be sure to change this function.
 type VgInfo struct {
 	EtcdKeyHeader
 	VgInfoValue
+}
+
+// deepCopyVgInfo copies the source to the destination including
+// all structs
+func deepCopyVgInfo(src VgInfo, dst *VgInfo) {
+	dst.EtcdKeyHeader.CreateRevNum = src.EtcdKeyHeader.CreateRevNum
+	dst.EtcdKeyHeader.ModRevNum = src.EtcdKeyHeader.ModRevNum
+	dst.EtcdKeyHeader.RevNum = src.EtcdKeyHeader.RevNum
+	dst.EtcdKeyHeader.Version = src.EtcdKeyHeader.Version
+
+	dst.VgInfoValue = src.VgInfoValue
+	dst.VgInfoValue.VgState = src.VgInfoValue.VgState
+	dst.VgInfoValue.VgNode = src.VgInfoValue.VgNode
+	dst.VgInfoValue.VgIpAddr = src.VgInfoValue.VgIpAddr
+	dst.VgInfoValue.VgNetmask = src.VgInfoValue.VgNetmask
+	dst.VgInfoValue.VgNic = src.VgInfoValue.VgNic
+	dst.VgInfoValue.VgEnabled = src.VgInfoValue.VgEnabled
+	dst.VgInfoValue.VgAutofail = src.VgInfoValue.VgAutofail
+	dst.VgInfoValue.VgVolumeList = src.VgInfoValue.VgVolumeList
 }
 
 // VgState represents the state of a volume group at a given point in time
@@ -167,7 +193,6 @@ func (cs *EtcdConn) Server() (err error) {
 	cs.startWatchers()
 
 	// Set state of local node to STARTING
-	fmt.Printf("Set my state to STARTING\n")
 	err = cs.updateNodeState(cs.hostName, RevisionNumber(0), STARTING, nil)
 	if err != nil {
 		// TODO - assume this means txn timed out, could not

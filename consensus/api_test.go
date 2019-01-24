@@ -2,6 +2,7 @@ package consensus
 
 import (
 	"flag"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -151,13 +152,15 @@ func testStartVolumeGroup(t *testing.T) {
 		nic             = "eth0"
 		autoFailover    = true
 		enabled         = true
-		stopWatcherChan chan struct{} // Channel used to stop watcher
-		errWatcherChan  chan error    // Channel used to return errors from watcher
+		stopWatcherChan chan struct{}    // Channel used to stop watcher
+		errWatcherChan  chan error       // Channel used to return errors from watcher
+		testVgChan      chan vgTestEvent // Channel use to see VG changes
 	)
 
 	// TODO - move this to startTestVgWatcher()???
 	stopWatcherChan = make(chan struct{}, 1)
 	errWatcherChan = make(chan error, 1)
+	testVgChan = make(chan vgTestEvent, 10) // TODO - how large should it be?
 
 	assert := assert.New(t)
 
@@ -168,39 +171,46 @@ func testStartVolumeGroup(t *testing.T) {
 	deleteVgKeys(t, cs, keys)
 
 	// Start a watcher which will collect the state changes of
-	// the VG.  Later we use waitVgState(<VG NAME>, <STATE>) to block until
-	// the VG reaches this state.
-	cs.startTestVgWatcher(stopWatcherChan, errWatcherChan, nil)
+	cs.startTestVgWatcher(stopWatcherChan, errWatcherChan, testVgChan, nil)
 
 	// Setup as a server so that startVgs() will start the VG.
 	err := cs.Server()
 
 	// TODO - block until server is ONLINE
 
-	// TODO - how add volume list to a volume group?
-	// assume volumes are unique across VGs???
+	// Add a volume group
 	err = cs.AddVolumeGroup(vgTestName, ipAddr, netMask, nic, autoFailover, enabled)
 	assert.Nil(err, "AddVolumeGroup() returned err")
+
+	err = cs.setVgOnlining(vgTestName, cs.hostName)
+	assert.Nil(err, "setVgOnlining() should succeed")
+	fmt.Printf("AFTER VG ONLINING\n")
+
+	// Wait until the VG is ONLINE
+	unitTestWaitVg(vgTestName, ONLINEVS, testVgChan)
+
+	/***********************/
+	time.Sleep(1 * time.Second)
+	fmt.Printf("EXIT EARLY.....\n")
+	return
 
 	// Now remove the volume group - should fail since VG is in ONLINE
 	// or ONLINING state.  Only VGs which are OFFLINE can be removed.
 	err = cs.RmVolumeGroup(vgTestName)
 	assert.NotNil(err, "RmVolumeGroup() should have returned an err")
-
-	/*
-		unitTestWaitVg(vgTestName, OFFLINE)
-	*/
+	fmt.Printf("AFTER RM VG\n")
 
 	// Bring the VG offline, then online, then offline, and then remove it
 	err = cs.setVgOfflining(vgTestName)
 	assert.Nil(err, "setVgOfflining() should succeed")
+	fmt.Printf("AFTER VG OFFLINING\n")
 
-	/*
-		unitTestWaitVg(vgTestName, OFFLINE)
-	*/
+	// Wait until the VG is OFFLINE
+	unitTestWaitVg(vgTestName, OFFLINEVS, testVgChan)
 
 	err = cs.setVgOnlining(vgTestName, cs.hostName)
 	assert.Nil(err, "setVgOnlining() should succeed")
+	fmt.Printf("AFTER VG ONLINING\n")
 
 	/*
 		unitTestWaitVg(vgTestName, ONLINE)
