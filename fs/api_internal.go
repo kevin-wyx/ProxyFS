@@ -2706,10 +2706,10 @@ Restart:
 	for pObjectIndex = 0; pObjectIndex < numPObjects; pObjectIndex++ {
 		err = inodeVolumeHandle.Wrote(
 			dirEntryInodeNumber,
-			fileOffset,
 			pObjectPaths[pObjectIndex],
-			0,
-			pObjectLengths[pObjectIndex],
+			[]uint64{fileOffset},
+			[]uint64{0},
+			[]uint64{pObjectLengths[pObjectIndex]},
 			pObjectIndex > 0) // Initial pObjectIndex == 0 case will implicitly SetSize(,0)
 		if nil != err {
 			heldLocks.free()
@@ -4018,6 +4018,40 @@ func (mS *mountStruct) Write(userID inode.InodeUserID, groupID inode.InodeGroupI
 	size = uint64(len(buf))
 
 	return
+}
+
+func (mS *mountStruct) Wrote(userID inode.InodeUserID, groupID inode.InodeGroupID, otherGroupIDs []inode.InodeGroupID, inodeNumber inode.InodeNumber, objectPath string, fileOffset []uint64, objectOffset []uint64, length []uint64) (err error) {
+	mS.volStruct.jobRWMutex.RLock()
+	defer mS.volStruct.jobRWMutex.RUnlock()
+
+	inodeLock, err := mS.volStruct.inodeVolumeHandle.InitInodeLock(inodeNumber, nil)
+	if err != nil {
+		return
+	}
+	err = inodeLock.WriteLock()
+	if err != nil {
+		return
+	}
+	defer inodeLock.Unlock()
+
+	if !mS.volStruct.inodeVolumeHandle.Access(inodeNumber, userID, groupID, otherGroupIDs, inode.F_OK,
+		inode.NoOverride) {
+		err = blunder.NewError(blunder.NotFoundError, "ENOENT")
+		return
+	}
+	if !mS.volStruct.inodeVolumeHandle.Access(inodeNumber, userID, groupID, otherGroupIDs, inode.W_OK,
+		inode.OwnerOverride) {
+		err = blunder.NewError(blunder.PermDeniedError, "EACCES")
+		return
+	}
+
+	err = mS.volStruct.inodeVolumeHandle.Flush(inodeNumber, false)
+	mS.volStruct.untrackInFlightFileInodeData(inodeNumber, false)
+	mS.doInlineCheckpointIfEnabled()
+
+	err = mS.volStruct.inodeVolumeHandle.Wrote(inodeNumber, objectPath, fileOffset, objectOffset, length, false)
+
+	return // err, as set by inode.Wrote(), is sufficient
 }
 
 func validateBaseName(baseName string) (err error) {

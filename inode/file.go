@@ -583,6 +583,10 @@ func recordWrite(fileInode *inMemoryInodeStruct, fileOffset uint64, length uint6
 		}
 	}
 
+	if (fileOffset + length) > fileInode.Size {
+		fileInode.Size = fileOffset + length
+	}
+
 	incrementLogSegmentMapFileData(fileInode, logSegmentNumber, length)
 
 	return nil
@@ -615,19 +619,12 @@ func (vS *volumeStruct) Write(fileInodeNumber InodeNumber, offset uint64, buf []
 	}
 
 	length := uint64(len(buf))
+	startingSize := fileInode.Size
 
 	err = recordWrite(fileInode, offset, length, logSegmentNumber, logSegmentOffset)
 	if nil != err {
 		logger.ErrorWithError(err)
 		return
-	}
-
-	startingSize := fileInode.Size
-
-	offsetJustAfterWhereBufLogicallyWritten := offset + length
-
-	if offsetJustAfterWhereBufLogicallyWritten > startingSize {
-		fileInode.Size = offsetJustAfterWhereBufLogicallyWritten
 	}
 
 	appendedBytes := fileInode.Size - startingSize
@@ -643,7 +640,12 @@ func (vS *volumeStruct) Write(fileInodeNumber InodeNumber, offset uint64, buf []
 	return
 }
 
-func (vS *volumeStruct) Wrote(fileInodeNumber InodeNumber, fileOffset uint64, objectPath string, objectOffset uint64, length uint64, patchOnly bool) (err error) {
+func (vS *volumeStruct) Wrote(fileInodeNumber InodeNumber, objectPath string, fileOffset []uint64, objectOffset []uint64, length []uint64, patchOnly bool) (err error) {
+	if (len(fileOffset) != len(objectOffset)) || (len(objectOffset) != len(length)) {
+		err = fmt.Errorf("Wrote() called with unequal # of fileOffset's (%d), objectOffset's (%d), and length's (%d)", len(fileOffset), len(objectOffset), len(length))
+		return
+	}
+
 	snapShotIDType, _, _ := vS.headhunterVolumeHandle.SnapShotU64Decode(uint64(fileInodeNumber))
 	if headhunter.SnapShotIDTypeLive != snapShotIDType {
 		err = fmt.Errorf("Wrote() on non-LiveView fileInodeNumber not allowed")
@@ -659,14 +661,6 @@ func (vS *volumeStruct) Wrote(fileInodeNumber InodeNumber, fileOffset uint64, ob
 	if fileInode.dirty {
 		err = flush(fileInode, false)
 		if nil != err {
-			logger.ErrorWithError(err)
-			return
-		}
-	}
-
-	if !patchOnly {
-		if 0 != fileOffset || 0 != objectOffset {
-			err = fmt.Errorf("non-patch calls to Wrote() with non-zero offsets not supported")
 			logger.ErrorWithError(err)
 			return
 		}
@@ -693,40 +687,42 @@ func (vS *volumeStruct) Wrote(fileInodeNumber InodeNumber, fileOffset uint64, ob
 
 	fileInode.dirty = true
 
-	err = recordWrite(fileInode, fileOffset, length, logSegmentNumber, objectOffset)
-	if err != nil {
-		logger.ErrorWithError(err)
-		return
-	}
-
-	if patchOnly {
-		if (fileOffset + length) > fileInode.Size {
-			fileInode.Size = fileOffset + length
-		}
-
-		updateTime := time.Now()
-		fileInode.ModificationTime = updateTime
-		fileInode.AttrChangeTime = updateTime
-
-		fileInode.NumWrites++
-	} else {
-		err = setSizeInMemory(fileInode, length)
+	if !patchOnly {
+		err = setSizeInMemory(fileInode, 0)
 		if err != nil {
 			logger.ErrorWithError(err)
 			return
 		}
+	}
+
+	bytesWritten := uint64(0)
+
+	for i, thisLength := range length {
+		if 0 < thisLength {
+			err = recordWrite(fileInode, fileOffset[i], thisLength, logSegmentNumber, objectOffset[i])
+			if err != nil {
+				logger.ErrorWithError(err)
+				return
+			}
+
+			fileInode.NumWrites++
+			bytesWritten += thisLength
+		}
+	}
+
+	if !patchOnly {
+		// For this case only, make it appear we did precisely one write
 
 		fileInode.NumWrites = 1
 	}
 
-	fileInode.dirty = true
 	err = fileInode.volume.flushInode(fileInode)
 	if err != nil {
 		logger.ErrorWithError(err)
 		return
 	}
 
-	stats.IncrementOperationsAndBucketedBytes(stats.FileWrote, length)
+	stats.IncrementOperationsAndBucketedBytes(stats.FileWrote, bytesWritten)
 
 	return
 }

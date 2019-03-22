@@ -197,7 +197,7 @@ type VolumeHandle interface {
 	GetReadPlan(fileInodeNumber InodeNumber, offset *uint64, length *uint64) (readPlan []ReadPlanStep, err error)
 	Write(fileInodeNumber InodeNumber, offset uint64, buf []byte, profiler *utils.Profiler) (err error)
 	ProvisionObject() (objectPath string, err error)
-	Wrote(fileInodeNumber InodeNumber, fileOffset uint64, objectPath string, objectOffset uint64, length uint64, patchOnly bool) (err error)
+	Wrote(fileInodeNumber InodeNumber, objectPath string, fileOffset []uint64, objectOffset []uint64, length []uint64, patchOnly bool) (err error)
 	SetSize(fileInodeNumber InodeNumber, Size uint64) (err error)
 	Flush(fileInodeNumber InodeNumber, andPurge bool) (err error)
 	Coalesce(destInodeNumber InodeNumber, elements []*CoalesceElement) (modificationTime time.Time, numWrites uint64, fileSize uint64, err error)

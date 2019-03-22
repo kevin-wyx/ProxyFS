@@ -1039,9 +1039,9 @@ func TestAPI(t *testing.T) {
 		t.Fatalf("GetMetadata(fileInodeNumber) failed: %v", err)
 	}
 	checkMetadata(t, postMetadata, testMetadata, MetadataNumWritesField, "GetMetadata() before Wrote(,,,,true)")
-	err = testVolumeHandle.Wrote(fileInodeNumber, 1, fileInodeObjectPath, 0, 3, true)
+	err = testVolumeHandle.Wrote(fileInodeNumber, fileInodeObjectPath, []uint64{1}, []uint64{0}, []uint64{3}, true)
 	if nil != err {
-		t.Fatalf("Wrote(fileInodeNumber, 1, fileInodeObjectPath, 0, 3, true) failed: %v", err)
+		t.Fatalf("Wrote(fileInodeNumber, fileInodeObjectPath, []uint64{1}, []uint64{0}, []uint64{3}, true) failed: %v", err)
 	}
 	postMetadata, err = testVolumeHandle.GetMetadata(fileInodeNumber)
 	if nil != err {
@@ -1193,9 +1193,9 @@ func TestAPI(t *testing.T) {
 		t.Fatalf("GetMetadata(fileInodeNumber) failed: %v", err)
 	}
 	checkMetadata(t, postMetadata, testMetadata, MetadataNumWritesField, "GetMetadata() before Wrote(,,,,false)")
-	err = testVolumeHandle.Wrote(fileInodeNumber, 0, fileInodeObjectPath, 0, 2, false)
+	err = testVolumeHandle.Wrote(fileInodeNumber, fileInodeObjectPath, []uint64{0}, []uint64{0}, []uint64{2}, false)
 	if nil != err {
-		t.Fatalf("Wrote(fileInodeNumber, 0, fileInodeObjectPath, 0, 2, false) failed: %v", err)
+		t.Fatalf("Wrote(fileInodeNumber, fileInodeObjectPath, []uint64{0}, []uint64{0}, []uint64{2}, false) failed: %v", err)
 	}
 	postMetadata, err = testVolumeHandle.GetMetadata(fileInodeNumber)
 	if nil != err {
@@ -2132,9 +2132,9 @@ func TestAPI(t *testing.T) {
 	if nil != err {
 		t.Fatalf("ProvisionObject() failed: %v", err)
 	}
-	err = testVolumeHandle.Wrote(fileInode, uint64(0), objectPath, uint64(0), uint64(2), false)
+	err = testVolumeHandle.Wrote(fileInode, objectPath, []uint64{0}, []uint64{0}, []uint64{2}, false)
 	if nil != err {
-		t.Fatalf("Wrote(fileInode, uint64(0), objectPath, uint64(0), uint64(2), false) failed: %v", err)
+		t.Fatalf("Wrote(fileInode, objectPath, []uint64{0}, []uint64{0}, []uint64{2}, false) failed: %v", err)
 	}
 
 	time.Sleep(positiveDurationToDelayOrSkew)

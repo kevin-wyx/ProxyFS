@@ -100,6 +100,7 @@ const (
 	PingOp OpType = iota
 	ReadOp
 	WriteOp
+	WroteOp
 	FlushOp
 	LookupOp
 	LookupPathOp
@@ -118,6 +119,7 @@ var opTypeStrs = []string{
 	"Ping",
 	"Read",
 	"Write",
+	"Wrote",
 	"Flush",
 	"Lookup",
 	"LookupPath",
@@ -919,6 +921,18 @@ func UnixSec(t time.Time) (sec int64) {
 
 func UnixNanosec(t time.Time) (ns int64) {
 	return t.UnixNano() - t.Unix()*int64(time.Second)
+}
+
+func (s *Server) RpcWrote(in *WroteRequest, reply *WroteReply) (err error) {
+	enterGate()
+	defer leaveGate()
+
+	mountHandle, err := lookupMountHandleByMountIDAsString(in.MountID)
+	if nil == err {
+		err = mountHandle.Wrote(inode.InodeRootUserID, inode.InodeGroupID(0), nil, inode.InodeNumber(in.InodeNumber), in.ObjectPath, in.FileOffset, in.ObjectOffset, in.Length)
+	}
+
+	return
 }
 
 func (s *Server) RpcFlush(in *FlushRequest, reply *Reply) (err error) {

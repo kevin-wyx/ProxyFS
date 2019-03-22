@@ -776,6 +776,17 @@ type CoalesceReply struct {
 	NumWrites        uint64
 }
 
+type WroteRequest struct {
+	InodeHandle
+	ObjectPath   string
+	FileOffset   []uint64
+	ObjectOffset []uint64
+	Length       []uint64
+}
+
+type WroteReply struct {
+}
+
 type RenewLeaseReq struct {
 	LeaseId string
 }

@@ -113,6 +113,7 @@ allow_read_write = {
     "Server.TypeRequest",
     "Server.UnlinkPathRequest",
     "Server.UnlinkRequest",
+    "Server.WroteRequest",
 }
 
 
