@@ -1065,11 +1065,44 @@ func TestAPI(t *testing.T) {
 		t.Fatalf("GetReadPlan(fileInodeNumber, 0, 5) failed: %v", err)
 	}
 	if 3 != len(testReadPlan) {
-		t.Fatalf("GetReadPlan(fileInodeNumber, 0, 5) should have returned postMetadata.InodeStreamNameSlice with 3 elements")
+		t.Fatalf("GetReadPlan(fileInodeNumber, 0, 5) should have returned testReadPlan with 3 elements")
 	}
 	if (1 != testReadPlan[0].Length) || (fileInodeObjectPath != testReadPlan[1].ObjectPath) || (0 != testReadPlan[1].Offset) || (3 != testReadPlan[1].Length) || (1 != testReadPlan[2].Length) {
 		t.Fatalf("GetReadPlan(fileInodeNumber, 0, 5) returned unexpected testReadPlan")
 	}
+
+	testExtentMapChunk, err := testVolumeHandle.FetchExtentMap(fileInodeNumber, uint64(2), 2, 1)
+	if nil != err {
+		t.Fatalf("FetchExtentMap(fileInodeNumber, uint64(2), 2, 1) failed: %v", err)
+	}
+	if 3 != len(testExtentMapChunk) {
+		t.Fatalf("FetchExtentMap(fileInodeNumber, uint64(2), 2, 1) should have returned testExtentMapChunk with 3 elements")
+	}
+	fileInodeObjectPathSplit := strings.Split(fileInodeObjectPath, "/")
+	fileInodeObjectPathContainerName := fileInodeObjectPathSplit[len(fileInodeObjectPathSplit)-2]
+	fileInodeObjectPathObjectName := fileInodeObjectPathSplit[len(fileInodeObjectPathSplit)-1]
+	if (0 != testExtentMapChunk[0].FileOffset) ||
+		(0 != testExtentMapChunk[0].LogSegmentOffset) ||
+		(1 != testExtentMapChunk[0].Length) ||
+		(1 != testExtentMapChunk[1].FileOffset) ||
+		(0 != testExtentMapChunk[1].LogSegmentOffset) ||
+		(3 != testExtentMapChunk[1].Length) ||
+		(fileInodeObjectPathContainerName != testExtentMapChunk[1].ContainerName) ||
+		(fileInodeObjectPathObjectName != testExtentMapChunk[1].ObjectName) ||
+		(4 != testExtentMapChunk[2].FileOffset) ||
+		(4 != testExtentMapChunk[2].LogSegmentOffset) ||
+		(1 != testExtentMapChunk[2].Length) {
+		t.Fatalf("FetchExtentMap(fileInodeNumber, uint64(2), 2, 1) returned unexpected testExtentMapChunk")
+	}
+	/*
+	   type ExtentMapEntry struct {
+	   	FileOffset       uint64
+	   	LogSegmentOffset uint64
+	   	Length           uint64
+	   	ContainerName    string
+	   	ObjectName       string
+	   }
+	*/
 
 	// Suffix byte range query, like "Range: bytes=-2"
 	length = uint64(3)

@@ -89,13 +89,21 @@ type CoalesceElement struct {
 }
 
 type ReadPlanStep struct {
-	LogSegmentNumber uint64 // If == 0, Length specifies zero-file size
+	LogSegmentNumber uint64 // If == 0, Length specifies zero-fill size
 	Offset           uint64 // If zero-fill case, == 0
 	Length           uint64 // Must != 0
 	AccountName      string // If == "", Length specifies a zero-fill size
 	ContainerName    string // If == "", Length specifies a zero-fill size
 	ObjectName       string // If == "", Length specifies a zero-fill size
 	ObjectPath       string // If == "", Length specifies a zero-fill size
+}
+
+type ExtentMapEntry struct {
+	FileOffset       uint64
+	LogSegmentOffset uint64
+	Length           uint64
+	ContainerName    string
+	ObjectName       string
 }
 
 const (
@@ -195,6 +203,7 @@ type VolumeHandle interface {
 	CreateFile(filePerm InodeMode, userID InodeUserID, groupID InodeGroupID) (fileInodeNumber InodeNumber, err error)
 	Read(inodeNumber InodeNumber, offset uint64, length uint64, profiler *utils.Profiler) (buf []byte, err error)
 	GetReadPlan(fileInodeNumber InodeNumber, offset *uint64, length *uint64) (readPlan []ReadPlanStep, err error)
+	FetchExtentMap(fileInodeNumber InodeNumber, fileOffset uint64, maxEntriesFromFileOffset int64, maxEntriesBeforeFileOffset int64) (extentMapChunk []ExtentMapEntry, err error)
 	Write(fileInodeNumber InodeNumber, offset uint64, buf []byte, profiler *utils.Profiler) (err error)
 	ProvisionObject() (objectPath string, err error)
 	Wrote(fileInodeNumber InodeNumber, objectPath string, fileOffset []uint64, objectOffset []uint64, length []uint64, patchOnly bool) (err error)

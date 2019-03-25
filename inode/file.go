@@ -387,6 +387,128 @@ func (vS *volumeStruct) getReadPlanHelper(snapShotID uint64, fileInode *inMemory
 	return
 }
 
+func (vS *volumeStruct) FetchExtentMap(fileInodeNumber InodeNumber, fileOffset uint64, maxEntriesFromFileOffset int64, maxEntriesBeforeFileOffset int64) (extentMapChunk []ExtentMapEntry, err error) {
+	var (
+		containerName               string
+		encodedLogSegmentNumber     uint64
+		extentMap                   sortedmap.BPlusTree
+		extentMapLen                int
+		extentMapIndex              int
+		extentMapIndexAtOffset      int
+		extentMapIndexAtOffsetFound bool
+		extentMapIndexEnd           int
+		extentMapIndexStart         int
+		fileExtent                  *fileExtentStruct
+		fileExtentAsValue           sortedmap.Value
+		fileInode                   *inMemoryInodeStruct
+		objectName                  string
+		snapShotID                  uint64
+	)
+
+	if maxEntriesFromFileOffset < 1 {
+		err = fmt.Errorf("inode.FetchExtentMap() requires maxEntriesFromOffset (%d) >= 1", maxEntriesFromFileOffset)
+		return
+	}
+	if maxEntriesBeforeFileOffset < 0 {
+		err = fmt.Errorf("inode.FetchExtentMap() requires maxEntriesBeforeOffset (%d) >= 0", maxEntriesBeforeFileOffset)
+		return
+	}
+
+	fileInode, err = vS.fetchInodeType(fileInodeNumber, FileType)
+	if nil != err {
+		return
+	}
+
+	if fileInode.dirty {
+		err = flush(fileInode, false)
+		if nil != err {
+			logger.ErrorWithError(err)
+			return
+		}
+	}
+
+	extentMap = fileInode.payload.(sortedmap.BPlusTree)
+
+	extentMapLen, err = extentMap.Len()
+	if nil != err {
+		panic(err)
+	}
+
+	if 0 == extentMapLen {
+		extentMapChunk = make([]ExtentMapEntry, 0)
+		return
+	}
+
+	extentMapIndexAtOffset, extentMapIndexAtOffsetFound, err = extentMap.BisectLeft(fileOffset)
+	if nil != err {
+		panic(err)
+	}
+
+	if !extentMapIndexAtOffsetFound {
+		if extentMapIndexAtOffset >= 0 {
+			_, fileExtentAsValue, _, err = extentMap.GetByIndex(extentMapIndexAtOffset)
+			if nil != err {
+				panic(err)
+			}
+
+			fileExtent = fileExtentAsValue.(*fileExtentStruct)
+
+			if (fileExtent.FileOffset + fileExtent.Length) <= fileOffset {
+				extentMapIndexAtOffset++
+			}
+		} else {
+			extentMapIndexAtOffset = 0
+		}
+	}
+
+	if int64(extentMapIndexAtOffset) > maxEntriesBeforeFileOffset {
+		extentMapIndexStart = extentMapIndexAtOffset - int(maxEntriesBeforeFileOffset)
+	} else {
+		extentMapIndexStart = 0
+	}
+
+	if int64(extentMapLen-extentMapIndexAtOffset) <= maxEntriesFromFileOffset {
+		extentMapIndexEnd = extentMapLen - 1
+	} else {
+		extentMapIndexEnd = extentMapIndexAtOffset + int(maxEntriesFromFileOffset) - 1
+	}
+
+	if extentMapIndexEnd < extentMapIndexStart {
+		extentMapChunk = make([]ExtentMapEntry, 0)
+		return
+	}
+
+	extentMapChunk = make([]ExtentMapEntry, 0, extentMapIndexEnd-extentMapIndexStart+1)
+
+	_, snapShotID, _ = vS.headhunterVolumeHandle.SnapShotU64Decode(uint64(fileInodeNumber))
+
+	for extentMapIndex = extentMapIndexStart; extentMapIndex <= extentMapIndexEnd; extentMapIndex++ {
+		_, fileExtentAsValue, _, err = extentMap.GetByIndex(extentMapIndex)
+		if nil != err {
+			panic(err)
+		}
+
+		fileExtent = fileExtentAsValue.(*fileExtentStruct)
+
+		encodedLogSegmentNumber = vS.headhunterVolumeHandle.SnapShotIDAndNonceEncode(snapShotID, fileExtent.LogSegmentNumber)
+
+		containerName, objectName, _, err = vS.getObjectLocationFromLogSegmentNumber(encodedLogSegmentNumber)
+		if nil != err {
+			panic(err)
+		}
+
+		extentMapChunk = append(extentMapChunk, ExtentMapEntry{
+			FileOffset:       fileExtent.FileOffset,
+			LogSegmentOffset: fileExtent.LogSegmentOffset,
+			Length:           fileExtent.Length,
+			ContainerName:    containerName,
+			ObjectName:       objectName,
+		})
+	}
+
+	return
+}
+
 func incrementLogSegmentMapFileData(fileInode *inMemoryInodeStruct, logSegmentNumber uint64, incrementAmount uint64) {
 	logSegmentRecord, ok := fileInode.LogSegmentMap[logSegmentNumber]
 	if ok {
