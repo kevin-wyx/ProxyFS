@@ -25,6 +25,7 @@ import uuid
 
 
 allow_read_only = {
+    "Server.FetchExtentMapChunkRequest",
     "Server.GetAccountReq",
     "Server.GetContainerReq",
     "Server.GetObjectReq",
@@ -61,6 +62,7 @@ allow_read_write = {
     "Server.CreatePathRequest",
     "Server.CreateRequest",
     "Server.DeleteReq",
+    "Server.FetchExtentMapChunkRequest",
     "Server.FlockRequest",
     "Server.FlushRequest",
     "Server.GetAccountReq",

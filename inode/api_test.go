@@ -1071,38 +1071,35 @@ func TestAPI(t *testing.T) {
 		t.Fatalf("GetReadPlan(fileInodeNumber, 0, 5) returned unexpected testReadPlan")
 	}
 
-	testExtentMapChunk, err := testVolumeHandle.FetchExtentMap(fileInodeNumber, uint64(2), 2, 1)
+	testExtentMapChunk, err := testVolumeHandle.FetchExtentMapChunk(fileInodeNumber, uint64(2), 2, 1)
 	if nil != err {
 		t.Fatalf("FetchExtentMap(fileInodeNumber, uint64(2), 2, 1) failed: %v", err)
 	}
-	if 3 != len(testExtentMapChunk) {
-		t.Fatalf("FetchExtentMap(fileInodeNumber, uint64(2), 2, 1) should have returned testExtentMapChunk with 3 elements")
+	if 0 != testExtentMapChunk.FileOffsetRangeStart {
+		t.Fatalf("FetchExtentMap(fileInodeNumber, uint64(2), 2, 1) should have returned testExtentMapChunk.FileOffsetRangeStart == 0")
+	}
+	if 5 != testExtentMapChunk.FileOffsetRangeEnd {
+		t.Fatalf("FetchExtentMap(fileInodeNumber, uint64(2), 2, 1) should have returned testExtentMapChunk.FileOffsetRangeEnd == 5")
+	}
+	if 3 != len(testExtentMapChunk.ExtentMapEntry) {
+		t.Fatalf("FetchExtentMap(fileInodeNumber, uint64(2), 2, 1) should have returned testExtentMapChunk.ExtentMapEntry slice with 3 elements")
 	}
 	fileInodeObjectPathSplit := strings.Split(fileInodeObjectPath, "/")
 	fileInodeObjectPathContainerName := fileInodeObjectPathSplit[len(fileInodeObjectPathSplit)-2]
 	fileInodeObjectPathObjectName := fileInodeObjectPathSplit[len(fileInodeObjectPathSplit)-1]
-	if (0 != testExtentMapChunk[0].FileOffset) ||
-		(0 != testExtentMapChunk[0].LogSegmentOffset) ||
-		(1 != testExtentMapChunk[0].Length) ||
-		(1 != testExtentMapChunk[1].FileOffset) ||
-		(0 != testExtentMapChunk[1].LogSegmentOffset) ||
-		(3 != testExtentMapChunk[1].Length) ||
-		(fileInodeObjectPathContainerName != testExtentMapChunk[1].ContainerName) ||
-		(fileInodeObjectPathObjectName != testExtentMapChunk[1].ObjectName) ||
-		(4 != testExtentMapChunk[2].FileOffset) ||
-		(4 != testExtentMapChunk[2].LogSegmentOffset) ||
-		(1 != testExtentMapChunk[2].Length) {
-		t.Fatalf("FetchExtentMap(fileInodeNumber, uint64(2), 2, 1) returned unexpected testExtentMapChunk")
+	if (0 != testExtentMapChunk.ExtentMapEntry[0].FileOffset) ||
+		(0 != testExtentMapChunk.ExtentMapEntry[0].LogSegmentOffset) ||
+		(1 != testExtentMapChunk.ExtentMapEntry[0].Length) ||
+		(1 != testExtentMapChunk.ExtentMapEntry[1].FileOffset) ||
+		(0 != testExtentMapChunk.ExtentMapEntry[1].LogSegmentOffset) ||
+		(3 != testExtentMapChunk.ExtentMapEntry[1].Length) ||
+		(fileInodeObjectPathContainerName != testExtentMapChunk.ExtentMapEntry[1].ContainerName) ||
+		(fileInodeObjectPathObjectName != testExtentMapChunk.ExtentMapEntry[1].ObjectName) ||
+		(4 != testExtentMapChunk.ExtentMapEntry[2].FileOffset) ||
+		(4 != testExtentMapChunk.ExtentMapEntry[2].LogSegmentOffset) ||
+		(1 != testExtentMapChunk.ExtentMapEntry[2].Length) {
+		t.Fatalf("FetchExtentMap(fileInodeNumber, uint64(2), 2, 1) returned unexpected testExtentMapChunk.ExtentMapEntry slice")
 	}
-	/*
-	   type ExtentMapEntry struct {
-	   	FileOffset       uint64
-	   	LogSegmentOffset uint64
-	   	Length           uint64
-	   	ContainerName    string
-	   	ObjectName       string
-	   }
-	*/
 
 	// Suffix byte range query, like "Range: bytes=-2"
 	length = uint64(3)

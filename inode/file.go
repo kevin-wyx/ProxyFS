@@ -387,7 +387,7 @@ func (vS *volumeStruct) getReadPlanHelper(snapShotID uint64, fileInode *inMemory
 	return
 }
 
-func (vS *volumeStruct) FetchExtentMap(fileInodeNumber InodeNumber, fileOffset uint64, maxEntriesFromFileOffset int64, maxEntriesBeforeFileOffset int64) (extentMapChunk []ExtentMapEntry, err error) {
+func (vS *volumeStruct) FetchExtentMapChunk(fileInodeNumber InodeNumber, fileOffset uint64, maxEntriesFromFileOffset int64, maxEntriesBeforeFileOffset int64) (extentMapChunk *ExtentMapChunkStruct, err error) {
 	var (
 		containerName               string
 		encodedLogSegmentNumber     uint64
@@ -405,6 +405,8 @@ func (vS *volumeStruct) FetchExtentMap(fileInodeNumber InodeNumber, fileOffset u
 		snapShotID                  uint64
 	)
 
+	// Validate args
+
 	if maxEntriesFromFileOffset < 1 {
 		err = fmt.Errorf("inode.FetchExtentMap() requires maxEntriesFromOffset (%d) >= 1", maxEntriesFromFileOffset)
 		return
@@ -419,6 +421,8 @@ func (vS *volumeStruct) FetchExtentMap(fileInodeNumber InodeNumber, fileOffset u
 		return
 	}
 
+	// Ensure in-flight LogSegments are flushed
+
 	if fileInode.dirty {
 		err = flush(fileInode, false)
 		if nil != err {
@@ -426,6 +430,9 @@ func (vS *volumeStruct) FetchExtentMap(fileInodeNumber InodeNumber, fileOffset u
 			return
 		}
 	}
+
+	// Locate extent that either contains fileOffset,
+	//   or if no extent does, that we select the one just after fileOffset
 
 	extentMap = fileInode.payload.(sortedmap.BPlusTree)
 
@@ -435,7 +442,13 @@ func (vS *volumeStruct) FetchExtentMap(fileInodeNumber InodeNumber, fileOffset u
 	}
 
 	if 0 == extentMapLen {
-		extentMapChunk = make([]ExtentMapEntry, 0)
+		// In the absence of any extents, just describe entire fileInode as zero-filled
+
+		extentMapChunk = &ExtentMapChunkStruct{
+			FileOffsetRangeStart: 0,
+			FileOffsetRangeEnd:   fileInode.Size,
+			ExtentMapEntry:       make([]ExtentMapEntryStruct, 0),
+		}
 		return
 	}
 
@@ -461,6 +474,8 @@ func (vS *volumeStruct) FetchExtentMap(fileInodeNumber InodeNumber, fileOffset u
 		}
 	}
 
+	// Compute extent indices surrounding fileOffset that are also requested
+
 	if int64(extentMapIndexAtOffset) > maxEntriesBeforeFileOffset {
 		extentMapIndexStart = extentMapIndexAtOffset - int(maxEntriesBeforeFileOffset)
 	} else {
@@ -473,14 +488,28 @@ func (vS *volumeStruct) FetchExtentMap(fileInodeNumber InodeNumber, fileOffset u
 		extentMapIndexEnd = extentMapIndexAtOffset + int(maxEntriesFromFileOffset) - 1
 	}
 
-	if extentMapIndexEnd < extentMapIndexStart {
-		extentMapChunk = make([]ExtentMapEntry, 0)
-		return
-	}
-
-	extentMapChunk = make([]ExtentMapEntry, 0, extentMapIndexEnd-extentMapIndexStart+1)
+	// Populate extentMapChunk with selected extents
 
 	_, snapShotID, _ = vS.headhunterVolumeHandle.SnapShotU64Decode(uint64(fileInodeNumber))
+
+	extentMapChunk = &ExtentMapChunkStruct{
+		ExtentMapEntry: make([]ExtentMapEntryStruct, 0, extentMapIndexEnd-extentMapIndexStart+1),
+	}
+
+	// Fill in FileOffsetRangeStart to include zero-filled (non-)extent just before first returned extent
+
+	if extentMapIndexStart > 0 {
+		_, fileExtentAsValue, _, err = extentMap.GetByIndex(extentMapIndexStart - 1)
+		if nil != err {
+			panic(err)
+		}
+
+		fileExtent = fileExtentAsValue.(*fileExtentStruct)
+
+		extentMapChunk.FileOffsetRangeStart = fileExtent.FileOffset + fileExtent.Length
+	} else {
+		extentMapChunk.FileOffsetRangeStart = 0
+	}
 
 	for extentMapIndex = extentMapIndexStart; extentMapIndex <= extentMapIndexEnd; extentMapIndex++ {
 		_, fileExtentAsValue, _, err = extentMap.GetByIndex(extentMapIndex)
@@ -497,13 +526,28 @@ func (vS *volumeStruct) FetchExtentMap(fileInodeNumber InodeNumber, fileOffset u
 			panic(err)
 		}
 
-		extentMapChunk = append(extentMapChunk, ExtentMapEntry{
+		extentMapChunk.ExtentMapEntry = append(extentMapChunk.ExtentMapEntry, ExtentMapEntryStruct{
 			FileOffset:       fileExtent.FileOffset,
 			LogSegmentOffset: fileExtent.LogSegmentOffset,
 			Length:           fileExtent.Length,
 			ContainerName:    containerName,
 			ObjectName:       objectName,
 		})
+	}
+
+	// Fill in FileOffsetRangeEnd to included zero-filled (non-)extent just after last returned extent
+
+	if (extentMapIndexEnd + 1) == extentMapLen {
+		extentMapChunk.FileOffsetRangeEnd = fileInode.Size
+	} else {
+		_, fileExtentAsValue, _, err = extentMap.GetByIndex(extentMapIndexEnd + 1)
+		if nil != err {
+			panic(err)
+		}
+
+		fileExtent = fileExtentAsValue.(*fileExtentStruct)
+
+		extentMapChunk.FileOffsetRangeEnd = fileExtent.FileOffset
 	}
 
 	return

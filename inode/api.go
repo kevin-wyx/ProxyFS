@@ -98,12 +98,18 @@ type ReadPlanStep struct {
 	ObjectPath       string // If == "", Length specifies a zero-fill size
 }
 
-type ExtentMapEntry struct {
+type ExtentMapEntryStruct struct {
 	FileOffset       uint64
 	LogSegmentOffset uint64
 	Length           uint64
-	ContainerName    string
-	ObjectName       string
+	ContainerName    string // While "read-as-zero" entries in ExtentMapShunkStruct
+	ObjectName       string //   are not present, {Container|Object}Name would be == ""
+}
+
+type ExtentMapChunkStruct struct {
+	FileOffsetRangeStart uint64                 // Holes in [FileOffsetRangeStart:FileOffsetRangeEnd)
+	FileOffsetRangeEnd   uint64                 //   not covered in ExtentMapEntry slice should "read-as-zero"
+	ExtentMapEntry       []ExtentMapEntryStruct // All will be in [FileOffsetRangeStart:FileOffsetRangeEnd)
 }
 
 const (
@@ -203,7 +209,7 @@ type VolumeHandle interface {
 	CreateFile(filePerm InodeMode, userID InodeUserID, groupID InodeGroupID) (fileInodeNumber InodeNumber, err error)
 	Read(inodeNumber InodeNumber, offset uint64, length uint64, profiler *utils.Profiler) (buf []byte, err error)
 	GetReadPlan(fileInodeNumber InodeNumber, offset *uint64, length *uint64) (readPlan []ReadPlanStep, err error)
-	FetchExtentMap(fileInodeNumber InodeNumber, fileOffset uint64, maxEntriesFromFileOffset int64, maxEntriesBeforeFileOffset int64) (extentMapChunk []ExtentMapEntry, err error)
+	FetchExtentMapChunk(fileInodeNumber InodeNumber, fileOffset uint64, maxEntriesFromFileOffset int64, maxEntriesBeforeFileOffset int64) (extentMapChunk *ExtentMapChunkStruct, err error)
 	Write(fileInodeNumber InodeNumber, offset uint64, buf []byte, profiler *utils.Profiler) (err error)
 	ProvisionObject() (objectPath string, err error)
 	Wrote(fileInodeNumber InodeNumber, objectPath string, fileOffset []uint64, objectOffset []uint64, length []uint64, patchOnly bool) (err error)

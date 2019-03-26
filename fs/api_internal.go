@@ -384,26 +384,24 @@ func (mS *mountStruct) Create(userID inode.InodeUserID, groupID inode.InodeGroup
 	return fileInodeNumber, nil
 }
 
-func (mS *mountStruct) FetchReadPlan(userID inode.InodeUserID, groupID inode.InodeGroupID, otherGroupIDs []inode.InodeGroupID, inodeNumber inode.InodeNumber, offset uint64, length uint64) (readPlan []inode.ReadPlanStep, err error) {
+func (mS *mountStruct) FetchExtentMapChunk(userID inode.InodeUserID, groupID inode.InodeGroupID, otherGroupIDs []inode.InodeGroupID, fileInodeNumber inode.InodeNumber, fileOffset uint64, maxEntriesFromFileOffset int64, maxEntriesBeforeFileOffset int64) (extentMapChunk *inode.ExtentMapChunkStruct, err error) {
 	var (
-		inodeLock   *dlm.RWLockStruct
-		inodeType   inode.InodeType
-		localLength uint64
-		localOffset uint64
+		inodeLock *dlm.RWLockStruct
+		inodeType inode.InodeType
 	)
 
 	startTime := time.Now()
 	defer func() {
-		globals.FetchReadPlanUsec.Add(uint64(time.Since(startTime) / time.Microsecond))
+		globals.FetchExtentMapChunkUsec.Add(uint64(time.Since(startTime) / time.Microsecond))
 		if err != nil {
-			globals.FetchReadPlanErrors.Add(1)
+			globals.FetchExtentMapChunkErrors.Add(1)
 		}
 	}()
 
 	mS.volStruct.jobRWMutex.RLock()
 	defer mS.volStruct.jobRWMutex.RUnlock()
 
-	inodeLock, err = mS.volStruct.inodeVolumeHandle.InitInodeLock(inodeNumber, nil)
+	inodeLock, err = mS.volStruct.inodeVolumeHandle.InitInodeLock(fileInodeNumber, nil)
 	if nil != err {
 		return
 	}
@@ -413,42 +411,31 @@ func (mS *mountStruct) FetchReadPlan(userID inode.InodeUserID, groupID inode.Ino
 	}
 	defer inodeLock.Unlock()
 
-	if !mS.volStruct.inodeVolumeHandle.Access(inodeNumber, userID, groupID, otherGroupIDs, inode.F_OK,
+	if !mS.volStruct.inodeVolumeHandle.Access(fileInodeNumber, userID, groupID, otherGroupIDs, inode.F_OK,
 		inode.NoOverride) {
 		err = blunder.NewError(blunder.NotFoundError, "ENOENT")
 		return
 	}
-	if !mS.volStruct.inodeVolumeHandle.Access(inodeNumber, userID, groupID, otherGroupIDs, inode.R_OK,
+	if !mS.volStruct.inodeVolumeHandle.Access(fileInodeNumber, userID, groupID, otherGroupIDs, inode.R_OK,
 		inode.OwnerOverride) {
 		err = blunder.NewError(blunder.PermDeniedError, "EACCES")
 		return
 	}
 
-	inodeType, err = mS.volStruct.inodeVolumeHandle.GetType(inodeNumber)
+	inodeType, err = mS.volStruct.inodeVolumeHandle.GetType(fileInodeNumber)
 	if nil != err {
-		logger.ErrorfWithError(err, "couldn't get type for inode %v", inodeNumber)
+		logger.ErrorfWithError(err, "couldn't get type for inode %v", fileInodeNumber)
 		return
 	}
 	// Make sure the inode number is for a file inode
 	if inodeType != inode.FileType {
-		err = fmt.Errorf("%s: expected inode %v to be a file inode, got %v", utils.GetFnName(), inodeNumber, inodeType)
+		err = fmt.Errorf("%s: expected inode %v to be a file inode, got %v", utils.GetFnName(), fileInodeNumber, inodeType)
 		logger.ErrorWithError(err)
 		err = blunder.AddError(err, blunder.NotFileError)
 		return
 	}
 
-	localOffset = offset
-	localLength = length
-
-	readPlan, err = mS.volStruct.inodeVolumeHandle.GetReadPlan(inodeNumber, &localOffset, &localLength)
-	if err != nil {
-		return
-	}
-
-	if localOffset != offset {
-		err = blunder.NewError(blunder.BadSeekError, "supplied offset (0x%016X) could not be honored", offset)
-		return
-	}
+	extentMapChunk, err = mS.volStruct.inodeVolumeHandle.FetchExtentMapChunk(fileInodeNumber, fileOffset, maxEntriesFromFileOffset, maxEntriesBeforeFileOffset)
 
 	return
 }
