@@ -1,6 +1,7 @@
 package main
 
 import (
+	"container/list"
 	"log"
 	"net/http"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"bazil.org/fuse"
 
 	"github.com/swiftstack/ProxyFS/conf"
+	"github.com/swiftstack/ProxyFS/inode"
 	"github.com/swiftstack/ProxyFS/utils"
 )
 
@@ -32,24 +34,72 @@ type configStruct struct {
 	SwiftConnectionPoolSize uint64
 	ReadCacheLineSize       uint64 // Aligned chunk of a LogSegment
 	ReadCacheLineCount      uint64
-	ReadPlanLineSize        uint64 // ReadPlan covering an aligned chunk of File Data
-	ReadPlanLineCount       uint64
+	SharedFileLimit         uint64
+	ExclusiveFileLimit      uint64
+	MaxFlushSize            uint64
+	MaxFlushTime            time.Duration
 	LogFilePath             string // Unless starting with '/', relative to $CWD; == "" means disabled
 	LogToConsole            bool
 	TraceEnabled            bool
 }
 
+type fileInodeLockState uint32 // Note: These are w.r.t. the state of a remote Lock Request
+
+const (
+	fileInodeStateUnlocked fileInodeLockState = iota
+	fileInodeStateSharedLockRequested
+	fileInodeStateSharedLockGranted
+	fileInodeStateSharedLockReleasing
+	fileInoddStateExclusiveLockRequested
+	fileInodeStateExclusiveLockGranted
+	fileInodeStateExclusiveLockDemoting
+	fileInodeStateExclusiveLockReleasing
+)
+
+type fileInodeLockRequestStruct struct {
+	sync.WaitGroup
+	fileInode         *fileInodeStruct
+	forcedReleaseChan chan struct{} // Only used by long-running ExclusiveLocks due to infrequent Flush'ing
+	holdersElement    *list.Element // == nil if not yet granted
+	waitersElement    *list.Element // == nil if not waiting
+}
+
+type fileInodeStruct struct {
+	inode.InodeNumber
+	lockState            fileInodeLockState
+	sharedLockHolders    *list.List    // Elements are fileInodeLockRequestStructs.holdersElement's
+	sharedLockWaiters    *list.List    // Front() is oldest fileInodeLockRequestStruct.waitersElement
+	exclusiveLockHolders *list.List    // Elements are fileInodeLockRequestStructs.holdersElement's
+	exclusiveLockWaiters *list.List    // Front() is oldest fileInodeLockRequestStruct.waitersElement
+	cacheLRUElement      *list.Element // Element on one of globals.{unlocked|shared|exclusive}FileInodeCacheLRU
+	//                                      On globals.unlockedFileInodeCacheLRU      if lockState one of:
+	//                                        fileInodeStateUnlocked
+	//                                        fileInodeStateSharedLockReleasing
+	//                                        fileInodeStateExclusiveLockReleasing
+	//                                      On globals.sharedLockFileInodeCacheLRU    if lockState one of:
+	//                                        fileInodeStateSharedLockRequested
+	//                                        fileInodeStateSharedLockGranted
+	//                                        fileInodeStateExclusiveLockDemoting
+	//                                      On globals.exclusiveLockFileInodeCacheLRU if lockState one of:
+	//                                        fileInodeStateExclusiveLockRequested
+	//                                        fileInodeStateExclusiveLockGranted
+}
+
 type globalsStruct struct {
 	sync.Mutex
-	config             configStruct
-	logFile            *os.File // == nil if configStruct.LogFilePath == ""
-	httpClient         *http.Client
-	retryDelay         []time.Duration
-	swiftAuthWaitGroup *sync.WaitGroup
-	swiftAuthToken     string
-	swiftAccountURL    string // swiftStorageURL with AccountName forced to config.SwiftAccountName
-	fuseConn           *fuse.Conn
-	jrpcLastID         uint64
+	config                         configStruct
+	logFile                        *os.File // == nil if configStruct.LogFilePath == ""
+	httpClient                     *http.Client
+	retryDelay                     []time.Duration
+	swiftAuthWaitGroup             *sync.WaitGroup
+	swiftAuthToken                 string
+	swiftAccountURL                string // swiftStorageURL with AccountName forced to config.SwiftAccountName
+	fuseConn                       *fuse.Conn
+	jrpcLastID                     uint64
+	fileInodeMap                   map[inode.InodeNumber]*fileInodeStruct
+	unlockedFileInodeCacheLRU      *list.List // Front() is oldest fileInodeStruct.cacheLRUElement
+	sharedLockFileInodeCacheLRU    *list.List // Front() is oldest fileInodeStruct.cacheLRUElement
+	exclusiveLockFileInodeCacheLRU *list.List // Front() is oldest fileInodeStruct.cacheLRUElement
 }
 
 var globals globalsStruct
@@ -201,12 +251,22 @@ func initializeGlobals(confMap conf.ConfMap) {
 		logFatal(err)
 	}
 
-	globals.config.ReadPlanLineSize, err = confMap.FetchOptionValueUint64("Agent", "ReadPlanLineSize")
+	globals.config.SharedFileLimit, err = confMap.FetchOptionValueUint64("Agent", "SharedFileLimit")
 	if nil != err {
 		logFatal(err)
 	}
 
-	globals.config.ReadPlanLineCount, err = confMap.FetchOptionValueUint64("Agent", "ReadPlanLineCount")
+	globals.config.ExclusiveFileLimit, err = confMap.FetchOptionValueUint64("Agent", "ExclusiveFileLimit")
+	if nil != err {
+		logFatal(err)
+	}
+
+	globals.config.MaxFlushSize, err = confMap.FetchOptionValueUint64("Agent", "MaxFlushSize")
+	if nil != err {
+		logFatal(err)
+	}
+
+	globals.config.MaxFlushTime, err = confMap.FetchOptionValueDuration("Agent", "MaxFlushTime")
 	if nil != err {
 		logFatal(err)
 	}
@@ -281,4 +341,10 @@ func initializeGlobals(confMap conf.ConfMap) {
 	updateAuthTokenAndAccountURL()
 
 	globals.jrpcLastID = 1
+
+	globals.fileInodeMap = make(map[inode.InodeNumber]*fileInodeStruct)
+
+	globals.unlockedFileInodeCacheLRU = list.New()
+	globals.sharedLockFileInodeCacheLRU = list.New()
+	globals.exclusiveLockFileInodeCacheLRU = list.New()
 }
