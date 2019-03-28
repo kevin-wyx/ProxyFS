@@ -1,6 +1,160 @@
 package main
 
-// Locks and Leases are related concepts but quite different
+import (
+	"container/list"
+
+	"github.com/swiftstack/ProxyFS/inode"
+)
+
+// References is a concept used to prevent two or more contexts from operating on
+// distinct instances of a FileInode. Consider the case where each instance
+// wants to lookup a previously unknown FileInode (i.e. by inode.InodeNumber).
+// Each would think it is unknown and promptly create distinct instances. To
+// prevent this, references to each FileInode instance will be strictly protected
+// by the sync.Mutex in globalsStruct. This necessitates that a "lookup" operation
+// be allowed to intrinsically create a fileInodeStruct. It also requires those
+// receiving a reference to a fileInodeStruct to eventually drop their reference
+// to it. Each of the globals.{unleased|sharedLease|exclusiveLease}FileInodeCacheLRU's
+// and the globals.fileInodeMap must, therefore, never "forget" a fileInodeStruct
+// for which a reference is still available.
+//
+// References occur in two cases:
+//
+//   A FileInode's ExtentMap is being fetched or maintained:
+//
+//     In this case, a single reference is made to indicate that this instance
+//     is caching the FileInode's size and some or all of its ExtentMap.
+//
+//   A FileInode has one or more in-flight LogSegment PUTs underway:
+//
+//     In this case, each LogSegment PUT is represented by a reference from the
+//     time it is initiated via a request to ProvisionObject() through the
+//     actual LogSegment PUT until the corresponding Wrote() request has completed.
+//
+// Note that the File Inode Cache (globals.fileInodeMap) typically swings into action
+// when initial references are made and when a last reference is released. It is,
+// however, possible for movements of fileInodeStructs among the globals.*CacheLRU's
+// to trigger evictions as well if, at the time, File Inode Cache limits are already
+// exceeded.
+
+func referenceFileInode(inodeNumber inode.InodeNumber) (fileInode *fileInodeStruct) {
+	var (
+		ok bool
+	)
+
+	globals.Lock()
+
+	fileInode, ok = globals.fileInodeMap[inodeNumber]
+
+	if ok {
+		fileInode.references++
+	} else {
+		fileInode = &fileInodeStruct{
+			InodeNumber:         inodeNumber,
+			references:          1,
+			leaseState:          fileInodeLeaseStateNone,
+			sharedLockHolders:   list.New(),
+			exclusiveLockHolder: nil,
+			lockWaiters:         list.New(),
+		}
+
+		fileInode.cacheLRUElement = globals.unleasedFileInodeCacheLRU.PushBack(fileInode)
+
+		globals.fileInodeMap[inodeNumber] = fileInode
+
+		honorInodeCacheLimitsWhileLocked()
+	}
+
+	globals.Unlock()
+
+	return
+}
+
+func (fileInode *fileInodeStruct) reference() {
+	globals.Lock()
+
+	if 0 == fileInode.references {
+		logFatalf("*fileInodeStruct.reference() should not have been called with fileInode.references == 0")
+	}
+
+	fileInode.references++
+
+	globals.Unlock()
+}
+
+func (fileInode *fileInodeStruct) dereference() {
+	globals.Lock()
+
+	fileInode.references--
+
+	if 0 == fileInode.references {
+		honorInodeCacheLimitsWhileLocked()
+	}
+
+	globals.Unlock()
+}
+
+func honorInodeCacheLimitsWhileLocked() {
+	var (
+		cacheLimitToEnforce      int
+		fileInode                *fileInodeStruct
+		fileInodeCacheLRUElement *list.Element
+	)
+
+	cacheLimitToEnforce = int(globals.config.ExclusiveFileLimit)
+
+	for globals.exclusiveLeaseFileInodeCacheLRU.Len() > cacheLimitToEnforce {
+		fileInodeCacheLRUElement = globals.exclusiveLeaseFileInodeCacheLRU.Front()
+		fileInode = fileInodeCacheLRUElement.Value.(*fileInodeStruct)
+		if (0 < fileInode.references) || (fileInodeLeaseStateExclusiveGranted != fileInode.leaseState) {
+			break
+		}
+		// TODO: kick off Lease Demote
+		fileInode.leaseState = fileInodeLeaseStateExclusiveDemoting
+		globals.exclusiveLeaseFileInodeCacheLRU.Remove(fileInodeCacheLRUElement)
+		fileInode.cacheLRUElement = globals.sharedLeaseFileInodeCacheLRU.PushBack(fileInode)
+	}
+
+	cacheLimitToEnforce = int(globals.config.SharedFileLimit)
+
+	if globals.exclusiveLeaseFileInodeCacheLRU.Len() > int(globals.config.ExclusiveFileLimit) {
+		cacheLimitToEnforce -= globals.exclusiveLeaseFileInodeCacheLRU.Len() - int(globals.config.ExclusiveFileLimit)
+		if 0 > cacheLimitToEnforce {
+			cacheLimitToEnforce = 0
+		}
+	}
+
+	for globals.sharedLeaseFileInodeCacheLRU.Len() > cacheLimitToEnforce {
+		fileInodeCacheLRUElement = globals.sharedLeaseFileInodeCacheLRU.Front()
+		fileInode = fileInodeCacheLRUElement.Value.(*fileInodeStruct)
+		if (0 < fileInode.references) || (fileInodeLeaseStateSharedGranted != fileInode.leaseState) {
+			break
+		}
+		// TODO: kick off Lease Release
+		fileInode.leaseState = fileInodeLeaseStateSharedReleasing
+		globals.sharedLeaseFileInodeCacheLRU.Remove(fileInodeCacheLRUElement)
+		fileInode.cacheLRUElement = globals.unleasedFileInodeCacheLRU.PushBack(fileInode)
+	}
+
+	cacheLimitToEnforce = int(globals.config.ExclusiveFileLimit) - globals.exclusiveLeaseFileInodeCacheLRU.Len()
+	cacheLimitToEnforce += int(globals.config.SharedFileLimit) - globals.sharedLeaseFileInodeCacheLRU.Len()
+
+	if 0 < cacheLimitToEnforce {
+		cacheLimitToEnforce = 0
+	}
+
+	for globals.unleasedFileInodeCacheLRU.Len() > cacheLimitToEnforce {
+		fileInodeCacheLRUElement = globals.unleasedFileInodeCacheLRU.Front()
+		fileInode = fileInodeCacheLRUElement.Value.(*fileInodeStruct)
+		if (0 < fileInode.references) || (fileInodeLeaseStateNone != fileInode.leaseState) {
+			break
+		}
+		globals.unleasedFileInodeCacheLRU.Remove(fileInodeCacheLRUElement)
+		delete(globals.fileInodeMap, fileInode.InodeNumber)
+	}
+}
+
+// Locks and Leases are related FileInode concepts but quite different
 //
 // Locks are short-lived used for tracking the presumably small amount of time spent in a
 // read or write operation. ProxyFS itself will manage the necessary serialization at its
@@ -53,26 +207,19 @@ package main
 // performant way as practical (e.g. by not insisting an instance immediately relinquish
 // an Lease it was just granted).
 
+// TODO: The section below needs to be totally re-worked...
+
 func (fileInode *fileInodeStruct) requestInodeLockExclusive() (fileInodeLockRequest *fileInodeLockRequestStruct) {
 	fileInodeLockRequest = &fileInodeLockRequestStruct{
 		fileInode:      fileInode,
 		exclusive:      true,
 		holdersElement: nil,
-		waitersElement: nil,
+		waitersElement: nil, // TODO: indicate always granted for now
 	}
-
-	// TODO: Issue necessary RPCs or block if necessary... for now just grant as Exclusive locally
 
 	globals.Lock()
 
-	if fileInode.leaseState == fileInodeLeaseStateNone {
-		fileInode.leaseState = fileInodeLeaseStateExclusiveGranted
-
-		_ = globals.unleasedFileInodeCacheLRU.Remove(fileInode.cacheLRUElement)
-		fileInode.cacheLRUElement = globals.exclusiveLeaseFileInodeCacheLRU.PushBack(fileInode)
-	}
-
-	fileInodeLockRequest.holdersElement = fileInode.exclusiveLockHolders.PushBack(fileInodeLockRequest)
+	fileInode.exclusiveLockHolder = fileInodeLockRequest
 
 	globals.Unlock()
 
@@ -82,15 +229,7 @@ func (fileInode *fileInodeStruct) requestInodeLockExclusive() (fileInodeLockRequ
 func (fileInodeLockRequest *fileInodeLockRequestStruct) release() {
 	globals.Lock()
 
-	_ = fileInodeLockRequest.fileInode.exclusiveLockHolders.Remove(fileInodeLockRequest.holdersElement)
-
-	// TODO: For now, relinquish lease (via RPCs) if now not locked locally
-
-	if 0 == fileInodeLockRequest.fileInode.exclusiveLockHolders.Len() {
-		fileInodeLockRequest.fileInode.leaseState = fileInodeLeaseStateNone
-	}
-
-	fileInodeLockRequest.holdersElement = nil
+	fileInodeLockRequest.fileInode.exclusiveLockHolder = nil // TODO: for now, just release it
 
 	globals.Unlock()
 }

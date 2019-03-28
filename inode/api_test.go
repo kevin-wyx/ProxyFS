@@ -1081,6 +1081,9 @@ func TestAPI(t *testing.T) {
 	if 5 != testExtentMapChunk.FileOffsetRangeEnd {
 		t.Fatalf("FetchExtentMap(fileInodeNumber, uint64(2), 2, 1) should have returned testExtentMapChunk.FileOffsetRangeEnd == 5")
 	}
+	if 5 != testExtentMapChunk.FileSize {
+		t.Fatalf("FetchExtentMap(fileInodeNumber, uint64(2), 2, 1) should have returned testExtentMapChunk.FileSize == 5")
+	}
 	if 3 != len(testExtentMapChunk.ExtentMapEntry) {
 		t.Fatalf("FetchExtentMap(fileInodeNumber, uint64(2), 2, 1) should have returned testExtentMapChunk.ExtentMapEntry slice with 3 elements")
 	}

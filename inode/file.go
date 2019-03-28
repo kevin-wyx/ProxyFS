@@ -447,6 +447,7 @@ func (vS *volumeStruct) FetchExtentMapChunk(fileInodeNumber InodeNumber, fileOff
 		extentMapChunk = &ExtentMapChunkStruct{
 			FileOffsetRangeStart: 0,
 			FileOffsetRangeEnd:   fileInode.Size,
+			FileSize:             fileInode.Size,
 			ExtentMapEntry:       make([]ExtentMapEntryStruct, 0),
 		}
 		return
@@ -493,6 +494,7 @@ func (vS *volumeStruct) FetchExtentMapChunk(fileInodeNumber InodeNumber, fileOff
 	_, snapShotID, _ = vS.headhunterVolumeHandle.SnapShotU64Decode(uint64(fileInodeNumber))
 
 	extentMapChunk = &ExtentMapChunkStruct{
+		FileSize:       fileInode.Size,
 		ExtentMapEntry: make([]ExtentMapEntryStruct, 0, extentMapIndexEnd-extentMapIndexStart+1),
 	}
 

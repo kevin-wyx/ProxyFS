@@ -227,6 +227,9 @@ func TestAllAPIPositiveCases(t *testing.T) {
 	if uint64(len(bufToWrite)) != extent_map_chunk.FileOffsetRangeEnd {
 		t.Fatalf("FetchExtentMapChunk() returned unexpected FileOffsetRangeEnd: %v (should be %v)", len(bufToWrite), extent_map_chunk.FileOffsetRangeEnd)
 	}
+	if uint64(len(bufToWrite)) != extent_map_chunk.FileSize {
+		t.Fatalf("FetchExtentMapChunk() returned unexpected FileSize: %v (should be %v)", len(bufToWrite), extent_map_chunk.FileSize)
+	}
 	if 1 != len(extent_map_chunk.ExtentMapEntry) {
 		t.Fatalf("FetchExtentMapChunk() returned unexpected len(ExtentMapEntry slice): %v (should be 1)", len(extent_map_chunk.ExtentMapEntry))
 	}

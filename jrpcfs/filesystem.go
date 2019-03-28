@@ -959,6 +959,7 @@ func (s *Server) RpcFetchExtentMapChunk(in *FetchExtentMapChunkRequest, reply *F
 		if nil == err {
 			reply.FileOffsetRangeStart = extentMapChunk.FileOffsetRangeStart
 			reply.FileOffsetRangeEnd = extentMapChunk.FileOffsetRangeEnd
+			reply.FileSize = extentMapChunk.FileSize
 			reply.ExtentMapEntry = extentMapChunk.ExtentMapEntry
 		}
 	}

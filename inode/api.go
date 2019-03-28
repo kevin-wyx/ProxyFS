@@ -109,6 +109,7 @@ type ExtentMapEntryStruct struct {
 type ExtentMapChunkStruct struct {
 	FileOffsetRangeStart uint64                 // Holes in [FileOffsetRangeStart:FileOffsetRangeEnd)
 	FileOffsetRangeEnd   uint64                 //   not covered in ExtentMapEntry slice should "read-as-zero"
+	FileSize             uint64                 //   up to the end-of-file as indicated by FileSize
 	ExtentMapEntry       []ExtentMapEntryStruct // All will be in [FileOffsetRangeStart:FileOffsetRangeEnd)
 }
 
