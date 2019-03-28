@@ -43,63 +43,63 @@ type configStruct struct {
 	TraceEnabled            bool
 }
 
-type fileInodeLockState uint32 // Note: These are w.r.t. the state of a remote Lock Request
+type fileInodeLeaseState uint32 // Note: These are w.r.t. the state of a remote Lock Request
 
 const (
-	fileInodeStateUnlocked fileInodeLockState = iota
-	fileInodeStateSharedLockRequested
-	fileInodeStateSharedLockGranted
-	fileInodeStateSharedLockReleasing
-	fileInoddStateExclusiveLockRequested
-	fileInodeStateExclusiveLockGranted
-	fileInodeStateExclusiveLockDemoting
-	fileInodeStateExclusiveLockReleasing
+	fileInodeLeaseStateNone fileInodeLeaseState = iota
+	fileInodeLeaseStateSharedRequested
+	fileInodeLeaseStateSharedGranted
+	fileInodeLeaseStateSharedReleasing
+	fileInodeLeaseStateExclusiveRequested
+	fileInodeLeaseStateExclusiveGranted
+	fileInodeLeaseStateExclusiveDemoting
+	fileInodeLeaseStateExclusiveReleasing
 )
 
 type fileInodeLockRequestStruct struct {
 	sync.WaitGroup
-	fileInode         *fileInodeStruct
-	forcedReleaseChan chan struct{} // Only used by long-running ExclusiveLocks due to infrequent Flush'ing
-	holdersElement    *list.Element // == nil if not yet granted
-	waitersElement    *list.Element // == nil if not waiting
+	fileInode      *fileInodeStruct
+	exclusive      bool
+	holdersElement *list.Element // == nil if not yet granted
+	waitersElement *list.Element // == nil if not waiting
 }
 
 type fileInodeStruct struct {
 	inode.InodeNumber
-	lockState            fileInodeLockState
+	leaseState           fileInodeLeaseState
 	sharedLockHolders    *list.List    // Elements are fileInodeLockRequestStructs.holdersElement's
 	sharedLockWaiters    *list.List    // Front() is oldest fileInodeLockRequestStruct.waitersElement
 	exclusiveLockHolders *list.List    // Elements are fileInodeLockRequestStructs.holdersElement's
 	exclusiveLockWaiters *list.List    // Front() is oldest fileInodeLockRequestStruct.waitersElement
 	cacheLRUElement      *list.Element // Element on one of globals.{unlocked|shared|exclusive}FileInodeCacheLRU
-	//                                      On globals.unlockedFileInodeCacheLRU      if lockState one of:
-	//                                        fileInodeStateUnlocked
-	//                                        fileInodeStateSharedLockReleasing
-	//                                        fileInodeStateExclusiveLockReleasing
-	//                                      On globals.sharedLockFileInodeCacheLRU    if lockState one of:
-	//                                        fileInodeStateSharedLockRequested
-	//                                        fileInodeStateSharedLockGranted
-	//                                        fileInodeStateExclusiveLockDemoting
-	//                                      On globals.exclusiveLockFileInodeCacheLRU if lockState one of:
-	//                                        fileInodeStateExclusiveLockRequested
-	//                                        fileInodeStateExclusiveLockGranted
+	//                                      On globals.unleasedFileInodeCacheLRU       if leaseState one of:
+	//                                        fileInodeLeaseStateNone
+	//                                        fileInodeLeaseStateSharedReleasing
+	//                                        fileInodeLeaseStateExclusiveReleasing
+	//                                      On globals.sharedLeaseFileInodeCacheLRU    if leaseState one of:
+	//                                        fileInodeLeaseStateSharedRequested
+	//                                        fileInodeLeaseStateSharedGranted
+	//                                        fileInodeLeaseStateExclusiveDemoting
+	//                                      On globals.exclusiveLeaseFileInodeCacheLRU if leaseState one of:
+	//                                        fileInodeLeaseStateExclusiveRequested
+	//                                        fileInodeLeaseStateExclusiveGranted
 }
 
 type globalsStruct struct {
 	sync.Mutex
-	config                         configStruct
-	logFile                        *os.File // == nil if configStruct.LogFilePath == ""
-	httpClient                     *http.Client
-	retryDelay                     []time.Duration
-	swiftAuthWaitGroup             *sync.WaitGroup
-	swiftAuthToken                 string
-	swiftAccountURL                string // swiftStorageURL with AccountName forced to config.SwiftAccountName
-	fuseConn                       *fuse.Conn
-	jrpcLastID                     uint64
-	fileInodeMap                   map[inode.InodeNumber]*fileInodeStruct
-	unlockedFileInodeCacheLRU      *list.List // Front() is oldest fileInodeStruct.cacheLRUElement
-	sharedLockFileInodeCacheLRU    *list.List // Front() is oldest fileInodeStruct.cacheLRUElement
-	exclusiveLockFileInodeCacheLRU *list.List // Front() is oldest fileInodeStruct.cacheLRUElement
+	config                          configStruct
+	logFile                         *os.File // == nil if configStruct.LogFilePath == ""
+	httpClient                      *http.Client
+	retryDelay                      []time.Duration
+	swiftAuthWaitGroup              *sync.WaitGroup
+	swiftAuthToken                  string
+	swiftAccountURL                 string // swiftStorageURL with AccountName forced to config.SwiftAccountName
+	fuseConn                        *fuse.Conn
+	jrpcLastID                      uint64
+	fileInodeMap                    map[inode.InodeNumber]*fileInodeStruct
+	unleasedFileInodeCacheLRU       *list.List // Front() is oldest fileInodeStruct.cacheLRUElement
+	sharedLeaseFileInodeCacheLRU    *list.List // Front() is oldest fileInodeStruct.cacheLRUElement
+	exclusiveLeaseFileInodeCacheLRU *list.List // Front() is oldest fileInodeStruct.cacheLRUElement
 }
 
 var globals globalsStruct
@@ -344,7 +344,7 @@ func initializeGlobals(confMap conf.ConfMap) {
 
 	globals.fileInodeMap = make(map[inode.InodeNumber]*fileInodeStruct)
 
-	globals.unlockedFileInodeCacheLRU = list.New()
-	globals.sharedLockFileInodeCacheLRU = list.New()
-	globals.exclusiveLockFileInodeCacheLRU = list.New()
+	globals.unleasedFileInodeCacheLRU = list.New()
+	globals.sharedLeaseFileInodeCacheLRU = list.New()
+	globals.exclusiveLeaseFileInodeCacheLRU = list.New()
 }
