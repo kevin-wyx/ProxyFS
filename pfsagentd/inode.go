@@ -154,15 +154,127 @@ func honorInodeCacheLimitsWhileLocked() {
 	}
 }
 
-// Locks and Leases are related FileInode concepts but quite different
+// Locks come in two forms: Shared and Exclusive. If an Exclusive Lock has been requested
+// or granted, any subsequent Shared Lock must also block lest forward progress of an
+// Exclusive Lock requestor would not be guaranteed.
 //
-// Locks are short-lived used for tracking the presumably small amount of time spent in a
-// read or write operation. ProxyFS itself will manage the necessary serialization at its
-// end for non-R/W operations but, due to local caching, local lock management must be
-// enforced.
+// One might imagine a desire to grab a Shared Lock and, later, determine that one actually
+// needs an Exclusive Lock. Alas, this is a recipe for deadlock if two such instances both
+// having obtained a Shared Lock attempting this promotion at about the same time. Neither
+// would be able to promote to Exclusive because the other is stuck continuing to hold its
+// Shared Lock.
+//
+// A better approach where such a promotion is possible is to do the reverse. Demoting an
+// Exclusive Lock to a Shared Lock has no such has no deadlock concern. Hence, if it is
+// possible one might ultimately need an Exclusive Lock, they should grab that first. If,
+// at some point, the potential for actually needing the Lock to remain Exclusive is gone
+// (but the Lock still needs to remain Shared), the Lock should then be demoted.
+//
+// Note, however, that it is expected Locks are actually held for very short intervals
+// (e.g. in the servicing of a FUSE upcall).
+
+// TODO
+// TODO
+// TODO
+// TODO - need to actually implement the rest of it :-)
+// TODO
+// TODO
+// TODO
+
+// getSharedLock returns a granted Shared Lock if possible. If it fails, nil is returned.
+func (fileInode *fileInodeStruct) getSharedLock() (grantedLock *fileInodeLockRequestStruct) {
+	return nil // TODO
+}
+
+// getExclusiveLock returns a granted Exclusive Lock if possible, If it fails, nil is returned.
+func (fileInode *fileInodeStruct) getExclusiveLock() (grantedLock *fileInodeLockRequestStruct) {
+	return nil // TODO
+}
+
+func (grantedLock *fileInodeLockRequestStruct) release() {
+	var (
+		fileInode       *fileInodeStruct
+		nextLock        *fileInodeLockRequestStruct
+		nextLockElement *list.Element
+	)
+
+	globals.Lock()
+
+	fileInode = grantedLock.fileInode
+
+	_ = fileInode.sharedLockHolders.Remove(grantedLock.holdersElement)
+
+	if grantedLock.exclusive {
+		// ExclusiveLock released - see if one or more pending LockRequest's can now be granted
+
+		nextLockElement = fileInode.lockWaiters.Front()
+
+		if nil != nextLockElement {
+			nextLock = nextLockElement.Value.(*fileInodeLockRequestStruct)
+
+			if nextLock.exclusive {
+				// Grant nextLock as ExclusiveLock
+
+				_ = fileInode.lockWaiters.Remove(nextLock.waitersElement)
+				nextLock.waitersElement = nil
+				fileInode.exclusiveLockHolder = nextLock
+				nextLock.Done()
+			} else {
+				// Grant nextLock, and any subsequent Lock's SharedLock
+				//   until an ExclusiveLock Request is encountered (or no more lockWaiters)
+
+				for {
+					_ = fileInode.lockWaiters.Remove(nextLock.waitersElement)
+					nextLock.waitersElement = nil
+					nextLock.holdersElement = fileInode.sharedLockHolders.PushBack(nextLock)
+					nextLock.Done()
+
+					nextLockElement = fileInode.lockWaiters.Front()
+					if nil == nextLockElement {
+						break
+					}
+					nextLock = nextLockElement.Value.(*fileInodeLockRequestStruct)
+					if nextLock.exclusive {
+						break
+					}
+				}
+			}
+		}
+	} else {
+		// SharedLock released - see if one pending ExclusiveLock can now be granted
+
+		nextLockElement = fileInode.lockWaiters.Front()
+
+		if nil != nextLockElement {
+			nextLock = nextLockElement.Value.(*fileInodeLockRequestStruct)
+
+			// Since a subsequent SharedLock Request would have been immediately granted,
+			//   we know this is an ExclusiveLock Request... so just grant it
+
+			// TODO: That said, we can't grant it unless/until we get an ExclusiveLease
+
+			_ = fileInode.lockWaiters.Remove(nextLock.waitersElement)
+			nextLock.waitersElement = nil
+			fileInode.exclusiveLockHolder = nextLock
+			nextLock.Done()
+		}
+	}
+
+	globals.Unlock()
+}
+
+// Leases, like Locks, also come in two forms: Shared and Exclusive. The key difference
+// is that Leases are used to coordinate access among distinct pfsagentd instances. As such,
+// the overhead of obtaining Leases suggests a good default behavior would be to continue
+// holding a Lease even after all Locks requiring the Lease have themselves been released
+// in anticipation of a new Lock request arriving shortly. Indeed, the caching of a
+// FileInode's ExtentMap remains valid for the life of a Shared or Exclusive Lease and not
+// having to fetch a FileInode's ExtentMap each time a read operation is performed
+// provides yet another incentive to holding a Shared Lease for a much longer period of
+// time.
 //
 // Importantly, such caching must be coordinated with other instances that may also need
-// to cache. This is where Leases come into play. In order to grant a Shared Lock, this
+// to cache. This is where Leases really shine. In order to grant a Shared Lock, this
 // instance must know that no other instance holds any Exclusive Locks. To do that, a
 // prerequisite for obtaining a Shared Lock is that this instance hold either a Shared
 // or Exclusive Lease. Similarly, in order to grant an Exclusive Lock, this instance must
@@ -170,18 +282,21 @@ func honorInodeCacheLimitsWhileLocked() {
 // prerequisite for obtaining an Exclusive Lock is that this instance hold an Exclusive
 // Lease.
 //
-// While Locks are inherently short-lived, the overhead of obtaining Leases suggests a
-// good default behavior would be to continue holding a Lease even after all Locks
-// requiring the Lease have been themselves been released. Indeed, the caching of a
-// FileInode's ExtentMap remains valid for the life of a Shared or Exclusive Lease and
-// not having to fetch a FileInode's ExtentMap each time a read operation is performed
-// provides yet another incentive to holding a Shared Lease for a much longer period of
-// time.
+// Due to write operations needing to be chained together into a smaller number of
+// LogSegment PUTs, it is typical for an Exclusive Lock to be released well before
+// such in-flight LogSegment PUTs have completed. And Exclusive Lease must be held,
+// not only for the life span of an Exclusive Lock, but also to include the life span
+// of any in-flight LogSegment PUTs.
 //
-// In a similar vein, write operations are a particular challenge in a ProxyFS environment
-// due to the need to append write data to a LogSegment rather than creating a fresh one
-// for each write operation. Such long-running LogSegment PUTs are only allowed while this
-// instance holds an Exclusive Lease.
+// As with promotion of a Shared Lock to an Exclusive Lock being deadlock inducing, this
+// concern certainly applies for the promotion of a Shared Lease to an Exclusive Lease.
+// The work-around of just always requesting an Exclusive Lease "just in case" is not
+// as desirebale when the duration of holding it is arbitrarily long. As such, Leases
+// will, in fact, support promotion with an important caveat that it might fail. Indeed,
+// it may very well occur that the Lease Manager has already issued a Revoke for a
+// previously granted Shared Lease. In this case, the instance requesting the promotion
+// will first have to go through the path of first releasing the Shared Lease it
+// currently holds before requesting the desired Exclusive Lease.
 //
 // Note that another instance may request a Shared or Exclusive Lease that is in conflict
 // with a Lease held by this instance. When this happens, a Lease Demotion (i.e. from
@@ -194,22 +309,16 @@ func honorInodeCacheLimitsWhileLocked() {
 // perhaps abruptly (i.e. it may not be possible to complete the flushing of any in-flight
 // LogSegment PUTs). After a suitable interval, ProxyFS would then be able to reliably
 // consider the instance losing contact to have relinquished all held Leases.
-//
-// A word about Lease Promotion must now be made. Consider two instances both holding
-// a Shared Lease each determine they need to obtain an Exclusive Lease at about the
-// same time. Both will make the Promotion request to ProxyFS but only one can succeed
-// in this. Indeed, in order for the winning instance to obtain the promoted Lease, the
-// losing instance must relinquish its Shared Lease first. It is up to ProxyFS to resolve
-// this race but, nevertheless, an instance must be prepared to not only receive a failure
-// to grant a Lease Promotion request, but it must also handle a request to relinquish the
-// Shared Lease it currently holds. In so doing, deadlock will be avoided. Relatedly, it
-// is up to ProxyFS to provide fairness such that forward progress is assured in as
-// performant way as practical (e.g. by not insisting an instance immediately relinquish
-// an Lease it was just granted).
 
-// TODO: The section below needs to be totally re-worked...
+// TODO
+// TODO
+// TODO
+// TODO - need to re-work this completely...
+// TODO
+// TODO
+// TODO
 
-func (fileInode *fileInodeStruct) requestInodeLockExclusive() (fileInodeLockRequest *fileInodeLockRequestStruct) {
+func (fileInode *fileInodeStruct) TODOrequestInodeLockExclusive() (fileInodeLockRequest *fileInodeLockRequestStruct) {
 	fileInodeLockRequest = &fileInodeLockRequestStruct{
 		fileInode:      fileInode,
 		exclusive:      true,
@@ -226,7 +335,7 @@ func (fileInode *fileInodeStruct) requestInodeLockExclusive() (fileInodeLockRequ
 	return
 }
 
-func (fileInodeLockRequest *fileInodeLockRequestStruct) release() {
+func (fileInodeLockRequest *fileInodeLockRequestStruct) TODOrelease() {
 	globals.Lock()
 
 	fileInodeLockRequest.fileInode.exclusiveLockHolder = nil // TODO: for now, just release it

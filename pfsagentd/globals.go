@@ -44,6 +44,7 @@ const (
 	fileInodeLeaseStateSharedRequested
 	fileInodeLeaseStateSharedGranted
 	fileInodeLeaseStateSharedReleasing
+	fileInodeLeaseStateSharedPromoting
 	fileInodeLeaseStateExclusiveRequested
 	fileInodeLeaseStateExclusiveGranted
 	fileInodeLeaseStateExclusiveDemoting
@@ -75,6 +76,7 @@ type fileInodeStruct struct {
 	//                                                     fileInodeLeaseStateSharedGranted
 	//                                                     fileInodeLeaseStateExclusiveDemoting
 	//                                                   On globals.exclusiveLeaseFileInodeCacheLRU if leaseState one of:
+	//                                                     fileInodeLeaseStateSharedPromoting
 	//                                                     fileInodeLeaseStateExclusiveRequested
 	//                                                     fileInodeLeaseStateExclusiveGranted
 }
