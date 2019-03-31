@@ -402,6 +402,10 @@ end
 # Configure Samba
 #
 
+execute "Create samba config dir" do
+  command "mkdir -p /opt/ss/etc/samba"
+end
+
 if ss_packages
   smb_conf = "/opt/ss/etc/samba/smb.conf"
 else
